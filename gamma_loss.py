@@ -1,14 +1,12 @@
 import numpy as np
-import random
 from scipy.optimize import minimize, Bounds
 from scipy.special import gamma, gammainc
 from scipy.stats import gamma as gamma_dist
+import csv
 
-def policy_iteration(initial, c, delta, lam, shape, risk_av, p, count):
+def policy_iteration(c, delta, lam, shape, risk_av, p, count):
     """
     Handles the main part of the iterative process of policy iteration.
-    
-    inital: Initial policy
     c: Vector of premiums
     delta: Discount factor
     lam: Rate parameter for gamma distribution
@@ -17,27 +15,56 @@ def policy_iteration(initial, c, delta, lam, shape, risk_av, p, count):
     p: Probability of no crash
     count: Number of iterations to perform.
     """
+    # Create initial policy (all 1/2 in corresponding places)
+    N = len(c)
+    policy = np.eye(N, N, 1) / 2 + np.eye(N,N,-1) / 2
+    policy[0][0] = 1/2
+    policy[N-1][N-1] = 1/2
+
     for i in range(0,count):
-        values = compute_value(initial, c, delta, lam, shape, risk_av, p)
-        initial = next_policy(values, risk_av, p, lam, shape, c, delta, initial)
+        values = compute_value(policy, c, delta, lam, shape, risk_av, p)
+        policy = next_policy(values, risk_av, p, lam, shape, c, delta, policy)
 
-    return initial
+    return policy
 
 
-def next_policy(values, risk_av, p, lam, shape, c, delta, prev):
+def next_policy(values, risk_av, p, lam, shape, c, delta, prev_policy):
     """
     Given the previous set of values, use bellmans to find next policy.
     """
     prob_bound = Bounds(0, 1)
     N = len(c)
-    next = np.zeros(N) # The next policy, to be updated below
+    next = np.zeros(N) # The next policy, to be updated below (just the probabilities)
 
     for i in range(0,N):
         # Minimize the bellman equation for each row in the policy
-        result = minimize(bellman, prev[i] , (values, i, risk_av, p, lam, shape, c, delta), method="trust-constr", bounds = prob_bound)
+        a = find_prob(prev_policy, i) # Find the probability from policy
+        result = minimize(bellman, a, (values, i, risk_av, p, lam, shape, c, delta), method="trust-constr", bounds = prob_bound)
         next[i] = result.x[0]
 
-    return next
+    policy = probs_to_policy(next, N, prev_policy)
+
+    return policy
+
+def probs_to_policy(probabilities, N, policy):
+    """
+    Takes the set of probabilities (pidown) and puts them into the matrix
+    """
+    # First place first/last row
+    policy[0][0] = probabilities[0]
+    policy[0][1] = 1 - probabilities[0]
+    policy[N-1][N-2] = probabilities[N-1]
+    policy[N-1][N-1] = 1 - probabilities[N-1]
+
+    if N == 2:
+        return policy
+
+    for i in range(1,N-1):
+        policy[i][i-1] = probabilities[i]
+        policy[i][i+1] = 1 - probabilities[i] 
+
+    return policy
+
 
 
 def bellman(a, values, state, risk_av, p, lam, shape, c, delta):
@@ -49,74 +76,29 @@ def bellman(a, values, state, risk_av, p, lam, shape, c, delta):
     # First term of Bellman
     g = g_exp_gamma(state, risk_av, p, lam, shape, a, c)
     # The second term of Bellman
-    if state == 1:
+    if state == 0:
         b = delta * (values[0] * a + values[1] * b)
-    elif state == N:
+    elif state == N-1:
         b = delta * (values[N-2] * a + values[N-1] * b)
     else:
-        b = delta * (values[state-2] * a + values[state] * b)
+        b = delta * (values[state-1] * a + values[state+1] * b)
     # Return negative so scipy minimize gives maximiser
     return -(g + b)
 
 
 
-def compute_value(A, c, delta, lam, shape, risk_av, p):
+def compute_value(policy, c, delta, lam, shape, risk_av, p):
     """
     Given a policy, compute the corresponding value from the sum.
-    A  = [a1, a2, ..., aN]
     """
     N = len(c)  # Number of states
-    V = []
-    for i in range(0,N):
-        v = []
-        # Generate 100 values and take average (MC simulation)
-        for j in range(0, 50):
-            losses = generate_gamma_losses(lam, shape, p, 20) # 50 Terms of the sum
-            v.append(compute_sum(delta, i, A, c, losses, risk_av, p, lam, shape))
-
-        # Append V with the estimate for V_i
-        V.append(np.mean(v))
-
+    A = np.eye(N,N) - delta * policy
+    A_inverse = np.linalg.inv(A)
+    g = g_vector(policy, risk_av, p, lam, shape, c)
+    g = g.reshape([-1,1])
+    
+    V = A_inverse @ g
     return V
-
-def compute_sum(delta, initial_state, A, c, losses, risk_av, p, lam, shape):
-    sum = 0
-    state = initial_state
-    num = len(losses)
-
-    # Find the finite horizon sum for num states
-    for k in range(0,num):
-        # Pass through a = alpha_i to g(i,alpha_i) (and all parameters)
-        sum += np.power(delta, k) * g_exp_gamma(state, risk_av, p, lam, shape, A[state-1], c)
-        # Update the state according to the policy, the loss in that period and the current state
-        state = next_state(state, losses[k], A, lam, shape, p)
-
-    return sum
-
-def next_state(state, loss, A, lam, shape, p):
-    """
-    Given a loss and current state, determine next state
-    """
-    N = len(A)
-    # quantile_gamma(alpha_i) = L_i the barrier
-    if loss <= quantile_gamma(A[state-1], lam, shape, p):
-        return max(1, state-1)
-    else:
-        return min(N, state+1)
-
-def generate_gamma_losses(lam, shape, p, n):
-    """
-    Generate n loss variables according to mixed Gamma(shape, lambda) distribution
-    """
-    random.seed(2)
-    losses = []
-    for i in range(0,n):
-        if np.random.binomial(1,1-p) == 0: # No loss made
-            losses.append(0)
-        else:
-            losses.append(np.random.gamma(shape, 1/lam))
-
-    return losses
 
 def g_exp_gamma(state, risk_av, p, lam, shape, a, c):
     """
@@ -127,11 +109,11 @@ def g_exp_gamma(state, risk_av, p, lam, shape, a, c):
     p: Probability of not crashing
     lam: Rate parameter for gamma distribution
     shape: Shaper parameter for gamma distribution
-    a: alpha_i, probability of not claiming in current state.
+    a: pidown_i, probability of not claiming in current state.
     c: Vector of premiums
     """
-    prem = c[state - 1]
-    coeff = - np.exp(-risk_av * prem) 
+    prem = c[state]
+    coeff = - np.exp(risk_av * prem) 
     L = quantile_gamma(a, lam, shape, p)
 
     if lam != risk_av:
@@ -140,6 +122,22 @@ def g_exp_gamma(state, risk_av, p, lam, shape, a, c):
         value_big_loss = (1-p) * np.power(gamma * L, shape) / gamma(shape+1)
     
     return coeff * (1 - a + p + value_big_loss)
+
+def g_vector(policy, risk_av, p, lam, shape, c):
+    N = len(c)
+    g = np.ones(N)
+    for i in range(0,N):
+        a = find_prob(policy, i)
+        g[i] = g_exp_gamma(i, risk_av, p, lam, shape, a, c)
+
+    return g
+
+def find_prob(policy, state):
+    """
+    Find the "pidown" probablility in the policy
+    """
+    i = max(state - 1, 0)
+    return policy[state][i]
 
 
 def quantile_gamma(x, lam, shape, p):
@@ -154,29 +152,63 @@ def recover_barrier(policy, lam, shape, p):
     N = len(policy)
     barriers = np.zeros(N)
     for i in range(0,N):
-        barriers[i] = quantile_gamma(policy[i], lam, shape, p)
+        a = find_prob(policy, i)
+        barriers[i] = quantile_gamma(a, lam, shape, p)
     return barriers
 
+def rates(lam, shape, p):
+    """
+    Deals with the input of rates based on the choice of principle
+    """
+    option = int(input("Inputting rates as: \n 1. Direct input \n 2. Expected value premium principle \n"))
+    print("Input 'x' to finish")
+    recent = 0
+    i = 1
+    c = []
+    if option == 1:
+        # Inputs are the premiums
+        while True:
+            recent = input(f"Enter premium for rate class {i}: ")
+            i += 1
+            if recent == "x":
+                break
+            else:
+                c.append(recent)
+    else:
+        # In other rate classes inputs are rate loadings
+        while True:
+            recent = input(f"Enter rate loading for rate class {i}: ")
+            i += 1
+            if recent == "x":
+                break
+            else:
+                c.append(float(recent) + 1)
+
+    c = np.array(c)
+
+    if option == 1:
+        return c
+    elif option == 2:
+        # Note rates * (1-p) * shape / lam is the expected value
+        return c * (1-p) * shape / lam
+        
+
+
+
 def main():
-    delta = 0.95
-    lam = 0.1
-    risk_av = 2
-    p=0.8
-    shape = 5
-
-    # Determine premiums using rate, expected value premium principle
-    rates = np.array([1.1, 1.2, 1.3, 1.4, 1.5])
-    c = rates *  (1-p) * shape / lam # note (1-p)*shape/lambda is the expected loss
+    # Take inputs
+    risk_av = float(input("Risk aversion parameter: "))
+    delta = float(input("Discount factor: "))
+    p = float(input("Probability of no loss: "))
+    lam = float(input("Rate parameter: "))
+    shape = float(input("Shape parameter: "))
+    c = rates(lam, shape, p)
     
-    N = len(c)
-
-    initial = np.ones(N) / 2
-    print(initial)
-
-    policy = policy_iteration(initial, c, delta, lam, shape, risk_av, p, 10)
+    # Perform policy iteration and recover barriers
+    policy = policy_iteration(c, delta, lam, shape, risk_av, p, 10)
     barriers = recover_barrier(policy, lam, shape, p)
     print(policy)
-    print(barriers) 
-    
+    print(barriers)
 
-main()
+if __name__ == "__main__":
+    main()
