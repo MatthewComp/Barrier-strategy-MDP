@@ -134,10 +134,12 @@ def g_exp_gamma(state, risk_av, p, lam, shape, a, c):
     coeff = - np.exp(-risk_av * prem) 
     L = quantile_gamma(a, lam, shape, p)
 
-    value_small_loss = 1 - a + p
-    value_loss = (1-p) * np.power(lam/(lam-risk_av), shape) * gammainc(shape, (lam - risk_av)*L)
+    if lam != risk_av:
+        value_big_loss = (1-p) * np.power(lam/(lam-risk_av), shape) * gammainc(shape, (lam - risk_av)*L)
+    else:
+        value_big_loss = (1-p) * np.power(gamma * L, shape) / gamma(shape+1)
     
-    return coeff * (value_small_loss + value_loss)
+    return coeff * (1 - a + p + value_big_loss)
 
 
 def quantile_gamma(x, lam, shape, p):
@@ -169,8 +171,9 @@ def main():
     N = len(c)
 
     initial = np.ones(N) / 2
+    print(initial)
 
-    policy = policy_iteration(initial, c, delta, lam, shape, risk_av, p, 100)
+    policy = policy_iteration(initial, c, delta, lam, shape, risk_av, p, 10)
     barriers = recover_barrier(policy, lam, shape, p)
     print(policy)
     print(barriers) 
