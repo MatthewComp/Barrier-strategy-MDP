@@ -20,15 +20,16 @@ def policy_iteration(c, delta, lam, shape, risk_av, p, count):
     policy = np.eye(N, N, 1) / 2 + np.eye(N,N,-1) / 2
     policy[0][0] = 1/2
     policy[N-1][N-1] = 1/2
+    c_mean = np.mean(c)
 
     for i in range(0,count):
-        values = compute_value(policy, c, delta, lam, shape, risk_av, p)
-        policy = next_policy(values, risk_av, p, lam, shape, c, delta, policy)
+        values = compute_value(policy, c, delta, lam, shape, risk_av, p, c_mean)
+        policy = next_policy(values, risk_av, p, lam, shape, c, delta, policy, c_mean)
 
     return policy
 
 
-def next_policy(values, risk_av, p, lam, shape, c, delta, prev_policy):
+def next_policy(values, risk_av, p, lam, shape, c, delta, prev_policy, c_mean):
     """
     Given the previous set of values, use bellmans to find next policy.
     """
@@ -39,7 +40,7 @@ def next_policy(values, risk_av, p, lam, shape, c, delta, prev_policy):
     for i in range(0,N):
         # Minimize the bellman equation for each row in the policy
         a = find_prob(prev_policy, i) # Find the probability from policy
-        result = minimize(bellman, a, (values, i, risk_av, p, lam, shape, c, delta), method="trust-constr", bounds = prob_bound)
+        result = minimize(bellman, a, (values, i, risk_av, p, lam, shape, c, delta, c_mean), method="trust-constr", bounds = prob_bound)
         next[i] = result.x[0]
 
     policy = probs_to_policy(next, N, prev_policy)
@@ -67,14 +68,14 @@ def probs_to_policy(probabilities, N, policy):
 
 
 
-def bellman(a, values, state, risk_av, p, lam, shape, c, delta):
+def bellman(a, values, state, risk_av, p, lam, shape, c, delta, c_mean):
     """
     The bellman operator, a is the value of alpha_i
     """
     N = len(c)
     b = 1 - a
     # First term of Bellman
-    g = g_exp_gamma(state, risk_av, p, lam, shape, a, c)
+    g = g_exp_gamma(state, risk_av, p, lam, shape, a, c, c_mean)
     # The second term of Bellman
     if state == 0:
         b = delta * (values[0] * a + values[1] * b)
@@ -87,20 +88,20 @@ def bellman(a, values, state, risk_av, p, lam, shape, c, delta):
 
 
 
-def compute_value(policy, c, delta, lam, shape, risk_av, p):
+def compute_value(policy, c, delta, lam, shape, risk_av, p, c_mean):
     """
     Given a policy, compute the corresponding value from the sum.
     """
     N = len(c)  # Number of states
     A = np.eye(N,N) - delta * policy
     A_inverse = np.linalg.inv(A)
-    g = g_vector(policy, risk_av, p, lam, shape, c)
+    g = g_vector(policy, risk_av, p, lam, shape, c, c_mean)
     g = g.reshape([-1,1])
     
     V = A_inverse @ g
     return V
 
-def g_exp_gamma(state, risk_av, p, lam, shape, a, c):
+def g_exp_gamma(state, risk_av, p, lam, shape, a, c, c_mean):
     """
     Calculates the immediate reward
 
@@ -113,22 +114,26 @@ def g_exp_gamma(state, risk_av, p, lam, shape, a, c):
     c: Vector of premiums
     """
     prem = c[state]
-    coeff = - np.exp(risk_av * prem) 
+    coeff = - np.exp(risk_av * (prem - c_mean))
     L = quantile_gamma(a, lam, shape, p)
 
     if lam != risk_av:
-        value_big_loss = (1-p) * np.power(lam/(lam-risk_av), shape) * gammainc(shape, (lam - risk_av)*L)
+        log_term = shape * np.log(lam / (lam - risk_av))
+        value_big_loss = (1 - p) * np.exp(log_term) * gammainc(shape, (lam - risk_av)*L)
     else:
-        value_big_loss = (1-p) * np.power(gamma * L, shape) / gamma(shape+1)
+        log_term = shape * np.log(risk_av * L)
+        value_big_loss = (1-p) * np.exp(log_term) / gamma(shape+1)
+
+    print(coeff * (1 - a + p + value_big_loss))
     
     return coeff * (1 - a + p + value_big_loss)
 
-def g_vector(policy, risk_av, p, lam, shape, c):
+def g_vector(policy, risk_av, p, lam, shape, c, c_mean):
     N = len(c)
     g = np.ones(N)
     for i in range(0,N):
         a = find_prob(policy, i)
-        g[i] = g_exp_gamma(i, risk_av, p, lam, shape, a, c)
+        g[i] = g_exp_gamma(i, risk_av, p, lam, shape, a, c, c_mean)
 
     return g
 
@@ -173,7 +178,7 @@ def rates(lam, shape, p):
             if recent == "x":
                 break
             else:
-                c.append(recent)
+                c.append(float(recent))
     else:
         # In other rate classes inputs are rate loadings
         while True:
@@ -209,6 +214,8 @@ def main():
     barriers = recover_barrier(policy, lam, shape, p)
     print(policy)
     print(barriers)
+    print(c)
+    print(c - np.mean(c))
 
 if __name__ == "__main__":
     main()
