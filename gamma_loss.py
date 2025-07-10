@@ -2,7 +2,6 @@ import numpy as np
 from scipy.optimize import minimize, Bounds
 from scipy.special import gamma, gammainc
 from scipy.stats import gamma as gamma_dist
-import csv
 
 def policy_iteration(c, delta, lam, shape, risk_av, p, count):
     """
