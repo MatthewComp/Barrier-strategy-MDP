@@ -96,3 +96,5 @@ with tab2:
     st.latex(r"""
         B_i = F^{-1}(\pi_i^\leftarrow).
 """)
+    
+    st.write("For more details, see the report in the repository.")
