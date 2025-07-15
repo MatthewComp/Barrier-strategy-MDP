@@ -1,6 +1,6 @@
 # SCDL-Project-MDP
 # SCDL-Project-MDP
-This project uses a MDP model for an insuracne contract to determine to determine an optimal claiming strategy.
+This project uses a MDP model for an insurance contract to determine to determine an optimal claiming strategy.
 This corresponds to my SCDL3991 project on this topic, the report is also included in the repository.
-A streamlit app is used to make the inputs and results clearer, but also include a brief explanation of what the methodology is.
+A streamlit app is used to make the inputs and results clearer, but also include a brief explanation of the methodology
 👉[Launch the App](https://barrier-strategy-mdp.streamlit.app)
